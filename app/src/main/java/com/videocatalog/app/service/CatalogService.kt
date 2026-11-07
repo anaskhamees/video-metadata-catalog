@@ -11,7 +11,7 @@ class CatalogService: Service() {
 
     override fun onCreate() {
         super.onCreate()
-        binder= CatalogBinder()
+        binder= CatalogBinder(VideoFolder(applicationContext))
     }
     //called once, the system caches this IBinder and gives it to every client
     override fun onBind(intent: Intent?): IBinder {

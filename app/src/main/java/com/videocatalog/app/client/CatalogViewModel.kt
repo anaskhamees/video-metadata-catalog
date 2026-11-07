@@ -29,7 +29,7 @@ import kotlinx.coroutines.withContext
  */
 class CatalogViewModel(app: Application) : AndroidViewModel(app) {
 
-    // Backing property: only this class can change the state; the UI gets a read-only view.
+    //  only this class can change the state; the UI gets a read-only view.
     private val _state = MutableStateFlow<CatalogUiState>(CatalogUiState.Loading)
     val state: StateFlow<CatalogUiState> = _state.asStateFlow()
 
@@ -39,6 +39,10 @@ class CatalogViewModel(app: Application) : AndroidViewModel(app) {
 
     // The current load request, so that a new refresh() can cancel an older one.
     private var loadJob: Job? = null
+
+    // True after bindService() until unbindService(). Not "connected" (that is catalog != null):
+    // the docs require unbindService() even when bindService() returned false.
+    private var needsUnbind = false
 
     // Explicit intent: names our own service class. The UI never calls its code directly.
     private val serviceIntent = Intent(app, CatalogService::class.java)
@@ -62,6 +66,7 @@ class CatalogViewModel(app: Application) : AndroidViewModel(app) {
         // Unlike onServiceDisconnected(), Android will never reconnect this binding
         // (e.g. after the service's app was updated). Release it and create a new one.
         override fun onBindingDied(name: ComponentName?) {
+            catalog = null
             unbind()
             bind()
         }
@@ -96,16 +101,20 @@ class CatalogViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun bind() {
-        // BIND_AUTO_CREATE: start the service (and its process) if it isn't running.
-        getApplication<Application>().bindService(serviceIntent, connection, Context.BIND_AUTO_CREATE)
-    }
+        val isBound = getApplication<Application>().bindService(
+            serviceIntent, connection, Context.BIND_AUTO_CREATE
+        )
+        needsUnbind = true
+        if (!isBound) _state.value = CatalogUiState.Error("Cannot bind to the catalog service")
 
+    }
     private fun unbind() {
-        getApplication<Application>().unbindService(connection)
+        if (needsUnbind) {
+            getApplication<Application>().unbindService(connection)
+            needsUnbind = false
+        }
     }
-
-    // Unbind exactly once when the ViewModel is destroyed. The docs require this
-    // even if bindService() returned false.
+    // Release the binding when the ViewModel is destroyed. unbind() is a no-op if already unbound.
     override fun onCleared() {
         super.onCleared()
         unbind()
