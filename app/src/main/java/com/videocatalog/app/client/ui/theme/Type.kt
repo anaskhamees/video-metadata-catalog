@@ -1,4 +1,4 @@
-package com.videocatalog.app.ui.theme
+package com.videocatalog.app.client.ui.theme
 
 import androidx.compose.material3.Typography
 import androidx.compose.ui.text.TextStyle

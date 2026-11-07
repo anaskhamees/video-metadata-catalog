@@ -1,4 +1,4 @@
-package com.videocatalog.app
+package com.videocatalog.app.client
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -11,7 +11,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
-import com.videocatalog.app.ui.theme.VideoCatalogTheme
+import com.videocatalog.app.client.ui.theme.VideoCatalogTheme
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
