@@ -13,6 +13,7 @@ project(video_metadata LANGUAGES CXX)
 # video_metadata: Target/library name.
 # SHARED: Creates a dynamically linked library (.so).
 add_library(video_metadata SHARED
+        jni_bridge.cpp
         metadata_extractor.cpp)
 
 # Requires the C++20 standard for this target.
