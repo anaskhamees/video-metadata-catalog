@@ -1,6 +1,5 @@
 package com.videocatalog.app.service
 
-import android.os.Parcel
 import android.os.ParcelFileDescriptor
 import android.os.Process
 import android.util.Log
