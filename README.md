@@ -120,11 +120,25 @@ The Binder call never runs on the main thread. The service creates no threads: e
 - More metadata: frame rate, bitrate, audio channels, rotation.
 - Different Media sources
 
+## Tested on
+
+The app was developed and tested on Cuttlefish Automotive Emulator,RPI5 HW, and **Android Studio's own Android Automotive emulator** (an AVD), which Android Studio creates and starts for you. No custom Android build or real car hardware is needed.
+
+| Setting | Value |
+|---|---|
+| Device (AVD) | **Automotive (1408p landscape) with Google Play** |
+| System image | Android 15 (API 35), Android Automotive with Google Play, `x86_64` |
+| Screen | 1408 × 792, 160 dpi, landscape |
+
+To create the same emulator: in Android Studio, open **Device Manager → + → Create Virtual Device**, choose the **Automotive** category, select **Automotive (1408p landscape) with Google Play**, pick the **API 35** Automotive system image, then finish and start it. Then select it in the device dropdown and press **Run**.
+
+Any other Android 13+ device or emulator (phone or Automotive) also works; see [Build](#build).
+
 ## Build
 
 You need:
 - Android Studio with the SDK, **NDK (Side by side)** and **CMake** installed (SDK Manager → SDK Tools).
-- A device or emulator running **Android 13 (API 33) or newer**, `x86_64` or `arm64-v8a`. Phones and **Android Automotive** both work (tested on the Automotive emulator, API 35).
+- A device or emulator running **Android 13 (API 33) or newer**, `x86_64` or `arm64-v8a`. Phones and **Android Automotive** both work (tested on the Automotive emulator, API 35; see [Tested on](#tested-on)).
 - `adb` on your `PATH` for the demo commands (it is in `<Android SDK>/platform-tools`).
 
 ```bash
