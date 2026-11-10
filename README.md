@@ -93,6 +93,7 @@ The Binder call never runs on the main thread. The service creates no threads: e
 | Valid media without a video track       | Row "No video track", with the audio flag                    |
 | File can't be opened                    | `IOException` caught per file → "Unreadable file" row        |
 | Service process dies (crash or killed)  | UI shows "Service stopped, reconnecting…"; Android restarts the service and the list reloads by itself |
+| Service crashes on every load (e.g. `libvideo_metadata.so` fails to load, so `NativeExtractor` throws an `Error` on a binder thread) | After 3 deaths without a successful load, auto-reload stops; UI shows "The service keeps crashing. Tap Refresh to retry." Android also backs off restarts (up to an hour), so Refresh unbinds and binds again, which starts the service immediately for one more try |
 | Binding dies for good (`onBindingDied`) | The ViewModel unbinds and binds again                        |
 | Refresh tapped during a load            | The older request is cancelled, so a stale reply never overwrites a newer one |
 
@@ -101,6 +102,7 @@ The Binder call never runs on the main thread. The service creates no threads: e
 | Area        | Decision                                                     | Why                                                          |
 | ----------- | ------------------------------------------------------------ | ------------------------------------------------------------ |
 | Processes   | One APK, service in `android:process=":metadata"`, `exported="false"` | Meets the two-process requirement with one attribute; a native crash can't take down the UI |
+| Isolation   | No `android:isolatedProcess`                                 | An isolated process gets its own UID and can't read `filesDir`, which this service owns. Untrusted container parsing already runs in the system's sandboxed `media.extractor` |
 | AIDL        | One blocking call, `List<VideoMetadata> listVideos()`        | Simplest correct design for a small folder; no path parameter, so the client can't name files |
 | Data model  | Structured AIDL parcelable + `ExtractStatus` enum (default `UNREADABLE`) | Contract lives in `.aidl` files; per-file errors are data, so one bad file never fails the list |
 | Folder      | `filesDir/videos`, missing samples copied from `assets/samples/` on a binder thread | App-private storage the service owns; zero-setup demo; no disk I/O on the main thread |

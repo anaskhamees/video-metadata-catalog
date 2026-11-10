@@ -5,6 +5,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
+import android.os.DeadObjectException
 import android.os.IBinder
 import android.os.RemoteException
 import androidx.lifecycle.AndroidViewModel
@@ -44,6 +45,15 @@ class CatalogViewModel(app: Application) : AndroidViewModel(app) {
     // the docs require unbindService() even when bindService() returned false.
     private var needsUnbind = false
 
+    // Service deaths since the last successful load. If a file makes the native code crash
+    // every time, auto-reloading would crash the service forever; after MAX_AUTO_RELOADS
+    // we stop and let the user retry with Refresh.
+    private var deathsSinceLoad = 0
+
+    // True when the user tapped Refresh while disconnected: load on the next connect
+    // even if the auto-reload limit was reached.
+    private var retryRequested = false
+
     // Explicit intent: names our own service class. The UI never calls its code directly.
     private val serviceIntent = Intent(app, CatalogService::class.java)
 
@@ -52,15 +62,25 @@ class CatalogViewModel(app: Application) : AndroidViewModel(app) {
 
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
             // Wrap the raw IBinder in the AIDL proxy generated from IVideoCatalog.aidl.
-            catalog = IVideoCatalog.Stub.asInterface(service)
-            refresh()
+            val proxy = IVideoCatalog.Stub.asInterface(service)
+            catalog = proxy
+            if (deathsSinceLoad < MAX_AUTO_RELOADS || retryRequested) {
+                retryRequested = false
+                load(proxy)
+            } else {
+                _state.value = CatalogUiState.Error(KEEPS_CRASHING)
+            }
         }
 
         // The service process died (crash or killed). The binding stays active: the system
-        // restarts the service and calls onServiceConnected() again, which reloads the list.
+        // restarts the service and calls onServiceConnected() again, but after repeated
+        // crashes it waits longer each time (up to 30 minutes), so Refresh rebinds instead.
         override fun onServiceDisconnected(name: ComponentName?) {
             catalog = null
-            _state.value = CatalogUiState.Error("Service stopped, reconnecting…")
+            deathsSinceLoad++
+            _state.value = CatalogUiState.Error(
+                if (deathsSinceLoad < MAX_AUTO_RELOADS) "Service stopped, reconnecting…" else KEEPS_CRASHING
+            )
         }
 
         // Unlike onServiceDisconnected(), Android will never reconnect this binding
@@ -81,21 +101,41 @@ class CatalogViewModel(app: Application) : AndroidViewModel(app) {
         bind()
     }
 
-    /** Asks the service for the current list. A newer call replaces an older one. */
+    /**
+     * Refresh button. Connected: reload the list. Disconnected: Android may not restart the
+     * service for a long time after repeated crashes, so drop the binding and bind again,
+     * which starts the service right away.
+     */
     fun refresh() {
-        val service = catalog ?: return   // not connected yet; onServiceConnected() will call us
+        val service = catalog
+        if (service != null) {
+            load(service)
+            return
+        }
+        loadJob?.cancel()
+        retryRequested = true
+        _state.value = CatalogUiState.Loading
+        unbind()
+        bind()
+    }
+
+    /** Asks the service for the current list. A newer call replaces an older one. */
+    private fun load(service: IVideoCatalog) {
         loadJob?.cancel()                 // a stale reply must never overwrite a newer one
         _state.value = CatalogUiState.Loading
         loadJob = viewModelScope.launch {
-            _state.value = try {
+            try {
                 // Blocking Binder call: run it on an IO thread, never on the main thread (ANR).
                 val videos = withContext(Dispatchers.IO) { service.listVideos() }
-                CatalogUiState.Content(videos)
+                deathsSinceLoad = 0
+                _state.value = CatalogUiState.Content(videos)
+            } catch (e: DeadObjectException) {
+                // The service died mid-call. onServiceDisconnected() reports it; don't overwrite
+                // its message, whichever of the two runs first.
             } catch (e: RemoteException) {
-                // Includes DeadObjectException (the service died mid-call).
                 // CancellationException is deliberately NOT caught: it is how coroutines stop, and
                 // catching it would let a cancelled request overwrite a newer one.
-                CatalogUiState.Error("Service unavailable: ${e.javaClass.simpleName}")
+                _state.value = CatalogUiState.Error("Service unavailable: ${e.javaClass.simpleName}")
             }
         }
     }
@@ -118,5 +158,10 @@ class CatalogViewModel(app: Application) : AndroidViewModel(app) {
     override fun onCleared() {
         super.onCleared()
         unbind()
+    }
+
+    private companion object {
+        const val MAX_AUTO_RELOADS = 3
+        const val KEEPS_CRASHING = "The service keeps crashing. Tap Refresh to retry."
     }
 }
