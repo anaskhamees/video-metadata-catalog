@@ -8,35 +8,101 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
+import com.videocatalog.app.client.data.ServiceCatalogRepository
 import com.videocatalog.app.client.ui.theme.VideoCatalogTheme
 
 class MainActivity : ComponentActivity() {
 
+
     /**
-     * ViewModel instance associated with this Activity.
+     * Holds the CatalogViewModel instance associated with this Activity.
      *
      * by viewModels() is a Kotlin property delegate provided by AndroidX.
      *
-     * It obtains the ViewModel from the Activity's ViewModelStore.
+     * WHAT DOES THE DELEGATE DO?
+     * - It manages how this Activity obtains its ViewModel.
+     * - It looks for the ViewModel in the Activity's ViewModelStore.
+     * - If an appropriate ViewModel already exists, it returns that instance.
+     * - Otherwise, it uses the supplied Factory to create a new instance.
      *
-     * Important:
-     * - The ViewModel survives configuration changes, such as screen rotation.
-     * - When the Activity is recreated after rotation, the existing ViewModel
-     *   instance is reused instead of creating a new one.
-     * - The ViewModel is not destroyed just because the Activity is recreated.
-     * - It does NOT automatically survive process death.
+     * LIFECYCLE:
+     * - The ViewModel survives Activity configuration changes, such as screen rotation.
+     * - When Android destroys and recreates the Activity during rotation,
+     *   the new Activity obtains the existing ViewModel from its ViewModelStore.
+     * - Therefore, the ViewModel is not recreated just because the Activity rotates.
+     * - The ViewModel does NOT automatically survive process death.
      *
-     * Why val?
-     * val means this property cannot be reassigned to another ViewModel.
-     *
-     * However, it does NOT mean that the ViewModel object is immutable.
-     * We can still call its functions, and its internal state can change.
+     * WHY val?
+     * - val means the property cannot be reassigned to another ViewModel.
+     * - It does NOT mean that the ViewModel object itself is immutable.
+     * - The ViewModel can still change its internal state and execute functions.
      *
      * Example:
-     * viewModel = CatalogViewModel() // ERROR: cannot reassign a val
-     * viewModel.refresh()            // OK: we can call its functions
+     * viewModel = otherViewModel     // ERROR: cannot reassign a val.
+     * viewModel.refresh()            // OK: calling a function is allowed.
      */
-    private val viewModel: CatalogViewModel by viewModels()
+    private val viewModel: CatalogViewModel by viewModels {
+
+        /*
+         * FACTORY:
+         *
+         * A ViewModel normally needs a way to be constructed.
+         *
+         * The default factory can only build a ViewModel whose constructor is empty,
+         * or takes only Application and/or SavedStateHandle.
+         * Our CatalogViewModel requires a CatalogRepository parameter (an interface),
+         * so the default factory cannot build it.
+         *
+         * Therefore, we provide a custom Factory that explains HOW to create it.
+         *
+         * IMPORTANT:
+         * Providing this factory does not mean the ViewModel is recreated every time.
+         * The factory is used only when the ViewModelStore does not already contain
+         * the requested ViewModel.
+         *
+         * COMPOSITION ROOT:
+         * This is the place where we connect the application components together:
+         * - We choose the concrete repository implementation.
+         * - We pass that repository into the ViewModel.
+         */
+
+        viewModelFactory {
+
+            /*
+             * INITIALIZER:
+             *
+             * Defines the actual construction instructions for CatalogViewModel.
+             *
+             * It is executed when the ViewModel needs to be created.
+             *
+             * applicationContext:
+             * - Provides the Application-level Context.
+             * - It is not tied to this Activity's lifecycle.
+             * - Using it avoids keeping an Activity reference inside the repository.
+             *
+             * ServiceCatalogRepository(applicationContext):
+             * - Creates the concrete repository responsible for communicating
+             *   with CatalogService.
+             * - The ViewModel only sees it as a CatalogRepository (the interface),
+             *   so tests can pass a fake implementation instead.
+             *
+             * CatalogViewModel(repository):
+             * - Creates the ViewModel and injects the repository through its
+             *   constructor.
+             *
+             * This is constructor dependency injection:
+             * We provide the dependency instead of making the ViewModel create it.
+             */
+            initializer {
+                CatalogViewModel(
+                    ServiceCatalogRepository(applicationContext)
+                )
+            }
+        }
+    }
+
 
     /**
      * Called by Android when this Activity is created.

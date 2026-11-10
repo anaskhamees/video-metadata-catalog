@@ -22,8 +22,9 @@ Client (UI) → AIDL → Service → JNI → NDK AMediaExtractor → Service →
 ```mermaid
 flowchart TB
   subgraph P1["UI process · com.videocatalog.app"]
-    UI["MainActivity + CatalogScreen<br/>Compose list"] -->|"collects StateFlow"| VM["CatalogViewModel<br/>owns the binding"]
-    VM -->|"listVideos() on Dispatchers.IO"| PX["IVideoCatalog proxy"]
+    UI["MainActivity + CatalogScreen<br/>Compose list"] -->|"collects StateFlow"| VM["CatalogViewModel<br/>screen state + retry policy"]
+    VM -->|"CatalogRepository interface"| RP["ServiceCatalogRepository<br/>owns the binding"]
+    RP -->|"listVideos() on Dispatchers.IO"| PX["IVideoCatalog proxy"]
   end
 
   PX <-->|"Binder IPC (AIDL)"| ST
@@ -43,7 +44,8 @@ flowchart TB
 | Path                                      | What it is                                                   |
 | ----------------------------------------- | ------------------------------------------------------------ |
 | `app/src/main/aidl/com/videocatalog/app/` | The IPC contract: `IVideoCatalog` (one call, `listVideos()`), `VideoMetadata` (one row), `ExtractStatus` (OK / no video / unreadable) |
-| `app/src/main/java/.../client/`           | UI process: `MainActivity`, `CatalogScreen` (Compose), `CatalogViewModel` (binds to the service, exposes one `StateFlow`) |
+| `app/src/main/java/.../client/`           | UI process: `MainActivity` (builds the ViewModel and its repository), `CatalogScreen` (Compose), `CatalogViewModel` (exposes one `StateFlow`, decides when to reload after a crash) |
+| `app/src/main/java/.../client/data/`      | `CatalogRepository` (interface the ViewModel depends on), `ServiceCatalogRepository` (binds to the service, calls the AIDL proxy, turns Binder errors into its own exceptions) |
 | `app/src/main/java/.../service/`          | Service process: `CatalogService`, `CatalogBinder` (implements the AIDL call), `VideoFolder` (the service's private folder), `NativeExtractor` + `NativeVideoInfo` (Kotlin side of JNI) |
 | `app/src/main/cpp/`                       | `jni_bridge.cpp` (JNI registration and conversion), `metadata_extractor.cpp` (the `AMediaExtractor` code), `CMakeLists.txt` |
 | `app/src/main/assets/samples/`            | The six test files                                           |
@@ -52,9 +54,9 @@ flowchart TB
 
 ### How it works, step by step
 
-1. **Start.** `MainActivity` gets `CatalogViewModel`, which binds to `CatalogService` with an explicit intent. Android starts the service in its own process, `:metadata`.
-2. **Connect.** `onServiceConnected` wraps the returned `IBinder` in the AIDL proxy (`IVideoCatalog.Stub.asInterface`) and calls `refresh()`.
-3. **Request.** `refresh()` shows Loading and calls `listVideos()` on `Dispatchers.IO`, because a Binder call blocks until the reply arrives.
+1. **Start.** `MainActivity` creates `CatalogViewModel` with a `ServiceCatalogRepository`. The ViewModel calls `connect()`, and the repository binds to `CatalogService` with an explicit intent. Android starts the service in its own process, `:metadata`.
+2. **Connect.** In the repository, `onServiceConnected` wraps the returned `IBinder` in the AIDL proxy (`IVideoCatalog.Stub.asInterface`) and notifies the ViewModel, which calls `load()`.
+3. **Request.** `load()` shows Loading and calls `repository.listVideos()`, which runs the Binder call on `Dispatchers.IO` because it blocks until the reply arrives.
 4. **Folder.** In the service, the call runs on a binder thread. `VideoFolder` first copies any missing bundled sample from `assets/samples/` into `filesDir/videos` (once per service start), then lists the regular files, sorted by name.
 5. **Open.** For each file, `CatalogBinder` opens a read-only `ParcelFileDescriptor`. Kotlin owns the fd: `use {}` closes it after the native call.
 6. **JNI.** `NativeExtractor.extractNativeMetadata(fd, length)` enters C++. The native method was bound by `RegisterNatives` when `JNI_OnLoad` ran on first use.
@@ -73,7 +75,7 @@ sequenceDiagram
     participant N as C++ / AMediaExtractor
 
     UI->>BT: bindService → onServiceConnected
-    UI->>IO: refresh()
+    UI->>IO: load() → repository.listVideos()
     IO->>BT: listVideos() (blocking Binder call)
     loop each file
         BT->>N: extractNativeMetadata(fd, length) via JNI
@@ -94,7 +96,7 @@ The Binder call never runs on the main thread. The service creates no threads: e
 | File can't be opened                    | `IOException` caught per file → "Unreadable file" row        |
 | Service process dies (crash or killed)  | UI shows "Service stopped, reconnecting…"; Android restarts the service and the list reloads by itself |
 | Service crashes on every load (e.g. `libvideo_metadata.so` fails to load, so `NativeExtractor` throws an `Error` on a binder thread) | After 3 deaths without a successful load, auto-reload stops; UI shows "The service keeps crashing. Tap Refresh to retry." Android also backs off restarts (up to an hour), so Refresh unbinds and binds again, which starts the service immediately for one more try |
-| Binding dies for good (`onBindingDied`) | The ViewModel unbinds and binds again                        |
+| Binding dies for good (`onBindingDied`) | The repository unbinds and binds again                       |
 | Refresh tapped during a load            | The older request is cancelled, so a stale reply never overwrites a newer one |
 
 ### Key decisions
@@ -108,7 +110,7 @@ The Binder call never runs on the main thread. The service creates no threads: e
 | Folder      | `filesDir/videos`, missing samples copied from `assets/samples/` on a binder thread | App-private storage the service owns; zero-setup demo; no disk I/O on the main thread |
 | JNI         | `extractNativeMetadata(fd, length)` returns a typed `NativeVideoInfo`; `RegisterNatives` in `JNI_OnLoad` | Kotlin owns the file, C++ only borrows the fd; name or signature errors fail at load time |
 | Native code | C++20, RAII (`unique_ptr`) over `AMediaExtractor` / `AMediaFormat`, `-fvisibility=hidden` | Every handle released on every path; metadata only, nothing is decoded; only `JNI_OnLoad` is exported |
-| Client      | ViewModel owns the binding; one `StateFlow`; Compose UI      | Survives rotation and day/night switches; reconnects automatically if the service dies |
+| Client      | Repository owns the binding; ViewModel owns one `StateFlow` and the retry policy; Compose UI | Survives rotation and day/night switches; reconnects automatically if the service dies; the ViewModel has no Android dependencies, so it can be unit-tested with a fake repository |
 | Build       | Single module, CMake, `minSdk 33`, `@Keep` on JNI classes    | One APK for phone and Android Automotive; R8 can't break the JNI lookups |
 
 ### Limitations
