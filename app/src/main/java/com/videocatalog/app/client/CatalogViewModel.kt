@@ -12,27 +12,14 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 /**
- * MVVM: the ViewModel turns data and events into screen state. It never touches Views,
- * Compose, Context, or Binder.
- *
- * Its two jobs:
- *  1. Expose what the screen shows as one [StateFlow] (single source of truth).
- *  2. Decide when to reload after the service crashes (the retry policy).
- *
- * DEPENDENCY INJECTION (constructor injection): the repository is passed in from outside
- * instead of being created here. The app passes ServiceCatalogRepository; tests pass a fake.
- * `private val` in the constructor = the parameter is also stored as a private property.
- *
- * It extends ViewModel (not AndroidViewModel) because it no longer needs an Application.
+ * Exposes the catalog screen state and owns the reload policy after service crashes.
+ * Has no Android framework dependencies beyond ViewModel, so it is unit-tested on the JVM.
  */
 class CatalogViewModel(private val repository: CatalogRepository) : ViewModel() {
 
-    // BACKING PROPERTY pattern: the mutable version is private (underscore by convention),
-    // the public one is read-only. Only this class can change the state; the UI can only read it.
     private val _state = MutableStateFlow<CatalogUiState>(CatalogUiState.Loading)
     val state: StateFlow<CatalogUiState> = _state.asStateFlow()
 
-    // The current load request, so that a new load() can cancel an older one.
     private var loadJob: Job? = null
 
     // Service deaths since the last successful load. If a file makes the native code crash
@@ -44,13 +31,8 @@ class CatalogViewModel(private val repository: CatalogRepository) : ViewModel() 
     // even if the auto-reload limit was reached.
     private var retryRequested = false
 
-    // OBSERVER: this object receives the repository's connection events.
-    // `object : CatalogRepository.Listener { ... }` = an anonymous object implementing the interface.
-    // It is private, so no other class can call these methods on the ViewModel.
-    //
-    // ORDER MATTERS: it must be declared BEFORE `init`. Kotlin runs property initializers and
-    // init blocks from top to bottom, and connect() may call onBindFailed() immediately; if this
-    // property were declared after init, it would still be null at that moment.
+    // Must be declared before `init`: connect() may call onBindFailed() synchronously,
+    // and a property declared after init would still be null at that point.
     private val connectionListener = object : CatalogRepository.Listener {
 
         override fun onConnected() {
@@ -64,7 +46,6 @@ class CatalogViewModel(private val repository: CatalogRepository) : ViewModel() 
 
         override fun onDisconnected() {
             deathsSinceLoad++
-            // `if` is an expression in Kotlin: it returns a value (no ternary operator needed).
             _state.value = CatalogUiState.Error(
                 if (deathsSinceLoad < MAX_AUTO_RELOADS) RECONNECTING else KEEPS_CRASHING
             )
@@ -79,7 +60,6 @@ class CatalogViewModel(private val repository: CatalogRepository) : ViewModel() 
         }
     }
 
-    // Runs once, when the ViewModel is created (NOT again after rotation: the same instance is reused).
     init {
         repository.connect(connectionListener)
     }
@@ -101,15 +81,11 @@ class CatalogViewModel(private val repository: CatalogRepository) : ViewModel() 
 
     /** Asks for the current list. A newer call replaces an older one. */
     private fun load() {
-        loadJob?.cancel()                 // a stale reply must never overwrite a newer one
+        loadJob?.cancel() // a stale reply must never overwrite a newer one
         _state.value = CatalogUiState.Loading
 
-        // viewModelScope: a coroutine scope tied to this ViewModel. It is cancelled automatically
-        // when the ViewModel is cleared, so no request outlives the screen.
-        // launch { } starts a coroutine and returns its Job (a handle we can cancel).
         loadJob = viewModelScope.launch {
             try {
-                // Suspends here (does not block the main thread) until the repository answers.
                 val videos = repository.listVideos()
                 deathsSinceLoad = 0
                 _state.value = CatalogUiState.Content(videos)
@@ -121,13 +97,11 @@ class CatalogViewModel(private val repository: CatalogRepository) : ViewModel() 
         }
     }
 
-    // Called once, when the screen is gone for good (not on rotation). Release the connection.
     override fun onCleared() {
         super.onCleared()
         repository.disconnect()
     }
 
-    // COMPANION OBJECT: members shared by all instances (like `static` in Java).
     private companion object {
         const val MAX_AUTO_RELOADS = 3
         const val RECONNECTING = "Service stopped, reconnecting…"

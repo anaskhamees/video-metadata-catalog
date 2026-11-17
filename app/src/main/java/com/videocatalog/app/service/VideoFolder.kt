@@ -20,16 +20,13 @@ class VideoFolder(context: Context) {
 
     private val appContext = context.applicationContext
 
-    // Resolve the destination directory when it is first accessed.
-    // Lazy: filesDir touches the disk, and the constructor runs on the main thread (onCreate).
+    // Lazy: filesDir touches the disk, and the constructor runs on the main thread.
     // First access happens in listFiles(), on a binder thread.
     private val dir by lazy {
         File(appContext.filesDir, VIDEOS_DIR)
     }
 
-    // Copy missing sample videos only once per VideoFolder instance.
-    // lazy is synchronized by default, so concurrent
-    // binder calls wait for the copy to finish instead of copying twice.
+    // Synchronized lazy: concurrent binder calls wait for one copy instead of copying twice.
     private val seeding = lazy {
         copyMissingSamples()
     }
@@ -55,7 +52,6 @@ class VideoFolder(context: Context) {
      */
     private fun copyMissingSamples() {
 
-        // Ensure the destination directory exists.
         if (!dir.isDirectory && !dir.mkdirs()) {
             Log.e(TAG, "Cannot create $dir")
             return
@@ -73,24 +69,18 @@ class VideoFolder(context: Context) {
 
             val target = File(dir, name)
 
-            // Avoid overwriting files that are already present.
             if (target.exists()) continue
 
-            // Copy to a temporary file before creating the final file.
+            // Copy to a temp file and rename, so a partial copy never appears under the real name.
             val tmp = File(dir, name + TMP_SUFFIX)
 
             try {
-                // Open the asset and copy its contents into the temporary file.
-                // use {} automatically closes both streams, even if an exception occurs.
-                // input: InputStream used to read bytes from the source asset.
-                // output: OutputStream used to write bytes to the destination temporary file.
                 assets.open("$ASSET_DIR/$name").use { input ->
                     tmp.outputStream().use { output ->
                         input.copyTo(output)
                     }
                 }
 
-                // Rename the temporary file after the copy completes successfully.
                 if (!tmp.renameTo(target)) {
                     throw IOException("rename failed for $name")
                 }
